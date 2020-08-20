@@ -34,8 +34,14 @@ const (
 	FORKS    = "repo/forks"
 )
 
-func renderDirectory(c *context.Context, treeLink string) {
-	tree, err := c.Repo.Commit.Subtree(c.Repo.TreePath)
+func renderDirectory(c *context.Context, treeLink string, entry *git.TreeEntry, sourceEntry *git.TreeEntry, sourceTreePath string) {
+	treePath := c.Repo.TreePath
+	if sourceEntry != nil {
+		treePath = sourceTreePath
+	}
+	c.Data["TreePath"] = treePath
+
+	tree, err := c.Repo.Commit.Subtree(treePath)
 	if err != nil {
 		c.NotFoundOrError(gitutil.NewError(err), "get subtree")
 		return
@@ -49,7 +55,7 @@ func renderDirectory(c *context.Context, treeLink string) {
 	entries.Sort()
 
 	c.Data["Files"], err = entries.CommitsInfo(c.Repo.Commit, git.CommitsInfoOptions{
-		Path:           c.Repo.TreePath,
+		Path:           treePath,
 		MaxConcurrency: conf.Repository.CommitsFetchConcurrency,
 		Timeout:        5 * time.Minute,
 	})
@@ -59,6 +65,7 @@ func renderDirectory(c *context.Context, treeLink string) {
 	}
 
 	var readmeFile *git.Blob
+	var readmeFileName string
 	for _, entry := range entries {
 		if entry.IsTree() || !markup.IsReadmeFile(entry.Name()) {
 			continue
@@ -66,6 +73,18 @@ func renderDirectory(c *context.Context, treeLink string) {
 
 		// TODO(unknwon): collect all possible README files and show with priority.
 		readmeFile = entry.Blob()
+		readmeFileName = readmeFile.Name()
+		if ok, sourceEntry, sourcePath, err := isSymlink(entry, c); ok {
+			c.Data["IsSymlinkSourceExists"] = true
+			if err != nil {
+				c.Data["SourceTreePath"] = err.Error()
+				c.Data["IsSymlinkSourceExists"] = false
+			} else if sourceEntry != nil {
+				c.Data["SourceTreePath"] = sourcePath
+				readmeFile = sourceEntry.Blob()
+			}
+			c.Data["IsSymlink"] = true
+		}
 		break
 	}
 
@@ -82,7 +101,7 @@ func renderDirectory(c *context.Context, treeLink string) {
 
 		isTextFile := tool.IsTextFile(p)
 		c.Data["IsTextFile"] = isTextFile
-		c.Data["FileName"] = readmeFile.Name()
+		c.Data["FileName"] = readmeFileName
 		if isTextFile {
 			switch markup.Detect(readmeFile.Name()) {
 			case markup.MARKDOWN:
@@ -93,7 +112,7 @@ func renderDirectory(c *context.Context, treeLink string) {
 				p = markup.OrgMode(p, treeLink, c.Repo.Repository.ComposeMetas())
 			case markup.IPYTHON_NOTEBOOK:
 				c.Data["IsIPythonNotebook"] = true
-				c.Data["RawFileLink"] = c.Repo.RepoLink + "/raw/" + path.Join(c.Repo.BranchName, c.Repo.TreePath, readmeFile.Name())
+				c.Data["RawFileLink"] = c.Repo.RepoLink + "/raw/" + path.Join(c.Repo.BranchName, treePath, readmeFile.Name())
 			default:
 				p = bytes.Replace(p, []byte("\n"), []byte(`<br>`), -1)
 			}
@@ -120,20 +139,39 @@ func renderDirectory(c *context.Context, treeLink string) {
 	}
 }
 
-func renderFile(c *context.Context, entry *git.TreeEntry, treeLink, rawLink string) {
+func renderFile(c *context.Context, entry *git.TreeEntry, sourceEntry *git.TreeEntry, sourceTreePath string, treeLink, rawLink string) {
 	c.Data["IsViewFile"] = true
+	c.Data["IsShowRawLink"] = true
+	c.Data["RawFileLink"] = rawLink + "/" + c.Repo.TreePath
+	c.Data["EditableFileTreePath"] = c.Repo.TreePath
 
-	blob := entry.Blob()
+	var blob *git.Blob
+	if entry.IsSymlink() {
+		c.Data["SourceTreePath"] = sourceTreePath
+		if sourceEntry != nil {
+			blob = sourceEntry.Blob()
+			c.Data["SourceFileSize"] = sourceEntry.Blob().Size()
+			c.Data["RawFileLink"] = rawLink + "/" + sourceTreePath
+			c.Data["EditableFileTreePath"] = sourceTreePath
+		} else {
+			c.Data["SourceFileSize"] = int64(0)
+			c.Data["IsShowRawLink"] = false
+		}
+	}
+
+	if blob == nil {
+		blob = entry.Blob()
+	}
+
 	p, err := blob.Bytes()
 	if err != nil {
 		c.Error(err, "read blob")
 		return
 	}
 
-	c.Data["FileSize"] = blob.Size()
-	c.Data["FileName"] = blob.Name()
+	c.Data["FileSize"] = entry.Blob().Size()
+	c.Data["FileName"] = entry.Blob().Name()
 	c.Data["HighlightClass"] = highlight.FileNameToHighlightClass(blob.Name())
-	c.Data["RawFileLink"] = rawLink + "/" + c.Repo.TreePath
 
 	isTextFile := tool.IsTextFile(p)
 	c.Data["IsTextFile"] = isTextFile
@@ -193,8 +231,10 @@ func renderFile(c *context.Context, entry *git.TreeEntry, treeLink, rawLink stri
 		}
 
 		if canEnableEditor {
-			c.Data["CanEditFile"] = true
-			c.Data["EditFileTooltip"] = c.Tr("repo.editor.edit_this_file")
+			if !entry.IsSymlink() || sourceEntry != nil {
+				c.Data["CanEditFile"] = true
+				c.Data["EditFileTooltip"] = c.Tr("repo.editor.edit_this_file")
+			}
 		} else if !c.Repo.IsViewBranch {
 			c.Data["EditFileTooltip"] = c.Tr("repo.editor.must_be_on_a_branch")
 		} else if !c.Repo.IsWriter() {
@@ -274,11 +314,28 @@ func Home(c *context.Context) {
 		return
 	}
 
-	if entry.IsTree() {
-		renderDirectory(c, treeLink)
+	if ok, sourceEntry, sourceTreePath, err := isSymlink(entry, c); ok {
+		c.Data["IsSymlink"] = true
+		c.Data["IsSymlinkSourceExists"] = true
+		if err != nil {
+			renderFile(c, entry, nil, err.Error(), treeLink, rawLink)
+			c.Data["IsSymlinkSourceExists"] = false
+		} else if sourceEntry != nil {
+			treeLink = branchLink + "/" + sourceTreePath
+			if sourceEntry.IsTree() {
+				renderDirectory(c, treeLink, entry, sourceEntry, sourceTreePath)
+			} else {
+				renderFile(c, entry, sourceEntry, sourceTreePath, treeLink, rawLink)
+			}
+		}
 	} else {
-		renderFile(c, entry, treeLink, rawLink)
+		if entry.IsTree() {
+			renderDirectory(c, treeLink, entry, nil, "")
+		} else {
+			renderFile(c, entry, nil, "", treeLink, rawLink)
+		}
 	}
+
 	if c.Written() {
 		return
 	}
@@ -359,4 +416,24 @@ func Forks(c *context.Context) {
 	c.Data["Forks"] = forks
 
 	c.Success(FORKS)
+}
+
+// isSymlink returns destination of given entry if it's a symlink.
+func isSymlink(entry *git.TreeEntry, c *context.Context) (bool, *git.TreeEntry, string, error) {
+	if !entry.IsSymlink() {
+		return false, nil, "", nil
+	}
+	p, err := entry.Blob().Bytes()
+	if err != nil {
+		return true, nil, "", err
+	}
+	sourceTreePath := string(p)
+	sourceEntry, err := c.Repo.Commit.TreeEntry("/" + sourceTreePath)
+	if err != nil {
+		return true, sourceEntry, sourceTreePath, err
+	}
+	if sourceEntry.IsSymlink() {
+		return isSymlink(sourceEntry, c)
+	}
+	return true, sourceEntry, sourceTreePath, nil
 }
