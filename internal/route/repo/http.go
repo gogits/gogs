@@ -64,7 +64,7 @@ func HTTPContexter() macaron.Handler {
 			strings.HasSuffix(c.Req.URL.Path, "git-upload-pack") ||
 			c.Req.Method == "GET"
 
-		owner, err := db.Users.GetByUsername(ownerName)
+		owner, err := db.Users.GetByUsername(c.Req.Context(), ownerName)
 		if err != nil {
 			if db.IsErrUserNotExist(err) {
 				c.Status(http.StatusNotFound)
@@ -75,7 +75,7 @@ func HTTPContexter() macaron.Handler {
 			return
 		}
 
-		repo, err := db.Repos.GetByName(owner.ID, repoName)
+		repo, err := db.Repos.GetByName(c.Req.Context(), owner.ID, repoName)
 		if err != nil {
 			if db.IsErrRepoNotExist(err) {
 				c.Status(http.StatusNotFound)
@@ -122,7 +122,7 @@ func HTTPContexter() macaron.Handler {
 			return
 		}
 
-		authUser, err := db.Users.Authenticate(authUsername, authPassword, -1)
+		authUser, err := db.Users.Authenticate(c.Req.Context(), authUsername, authPassword, -1)
 		if err != nil && !auth.IsErrBadCredentials(err) {
 			c.Status(http.StatusInternalServerError)
 			log.Error("Failed to authenticate user [name: %s]: %v", authUsername, err)
@@ -131,7 +131,7 @@ func HTTPContexter() macaron.Handler {
 
 		// If username and password combination failed, try again using username as a token.
 		if authUser == nil {
-			token, err := db.AccessTokens.GetBySHA(authUsername)
+			token, err := db.AccessTokens.GetBySHA(c.Req.Context(), authUsername)
 			if err != nil {
 				if db.IsErrAccessTokenNotExist(err) {
 					askCredentials(c, http.StatusUnauthorized, "")
@@ -141,11 +141,11 @@ func HTTPContexter() macaron.Handler {
 				}
 				return
 			}
-			if err = db.AccessTokens.Save(token); err != nil {
+			if err = db.AccessTokens.Save(c.Req.Context(), token); err != nil {
 				log.Error("Failed to update access token: %v", err)
 			}
 
-			authUser, err = db.Users.GetByID(token.UserID)
+			authUser, err = db.Users.GetByID(c.Req.Context(), token.UserID)
 			if err != nil {
 				// Once we found token, we're supposed to find its related user,
 				// thus any error is unexpected.
@@ -165,7 +165,10 @@ Please create and use personal access token on user settings page`)
 		if isPull {
 			mode = db.AccessModeRead
 		}
-		if !db.Perms.Authorize(authUser.ID, repo.ID, mode,
+		if !db.Perms.Authorize(c.Req.Context(),
+			authUser.ID,
+			repo.ID,
+			mode,
 			db.AccessModeOptions{
 				OwnerID: repo.OwnerID,
 				Private: repo.IsPrivate,

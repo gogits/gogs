@@ -6,6 +6,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -555,7 +556,10 @@ func (repo *Repository) ComposeCompareURL(oldCommitID, newCommitID string) strin
 }
 
 func (repo *Repository) HasAccess(userID int64) bool {
-	return Perms.Authorize(userID, repo.ID, AccessModeRead,
+	return Perms.Authorize(context.Background(),
+		userID,
+		repo.ID,
+		AccessModeRead,
 		AccessModeOptions{
 			OwnerID: repo.OwnerID,
 			Private: repo.IsPrivate,
@@ -1113,7 +1117,29 @@ func createRepository(e *xorm.Session, doer, owner *User, repo *Repository) (err
 
 	if err = watchRepo(e, owner.ID, repo.ID, true); err != nil {
 		return fmt.Errorf("watchRepo: %v", err)
-	} else if err = newRepoAction(e, doer, owner, repo); err != nil {
+	}
+
+	// TODO: This is identical to Actions.NewRepo but we are not yet able to wrap
+	// 	transaction with different ORM objects, should delete this once migrated to
+	// 	GORM for this part of logic.
+	newRepoAction := func(e Engine, doer *User, repo *Repository) (err error) {
+		opType := ActionCreateRepo
+		if repo.IsFork {
+			opType = ActionForkRepo
+		}
+
+		return notifyWatchers(e, &Action{
+			ActUserID:    doer.ID,
+			ActUserName:  doer.Name,
+			OpType:       opType,
+			RepoID:       repo.ID,
+			RepoUserName: repo.Owner.Name,
+			RepoName:     repo.Name,
+			IsPrivate:    repo.IsPrivate || repo.IsUnlisted,
+			CreatedUnix:  time.Now().Unix(),
+		})
+	}
+	if err = newRepoAction(e, doer, repo); err != nil {
 		return fmt.Errorf("newRepoAction: %v", err)
 	}
 
@@ -1358,9 +1384,33 @@ func TransferOwnership(doer *User, newOwnerName string, repo *Repository) error 
 		return fmt.Errorf("decrease old owner repository count: %v", err)
 	}
 
+	// Remove watch for organization.
+	if owner.IsOrganization() {
+		if err = watchRepo(sess, owner.ID, repo.ID, false); err != nil {
+			return fmt.Errorf("watchRepo [false]: %v", err)
+		}
+	}
+
 	if err = watchRepo(sess, newOwner.ID, repo.ID, true); err != nil {
 		return fmt.Errorf("watchRepo: %v", err)
-	} else if err = transferRepoAction(sess, doer, owner, repo); err != nil {
+	}
+
+	// TODO: This is identical to Actions.TransferRepo but we are not yet able to wrap
+	// 	transaction with different ORM objects, should delete this once migrated to
+	// 	GORM for this part of logic.
+	transferRepoAction := func(e Engine, doer, oldOwner *User, repo *Repository) error {
+		return notifyWatchers(e, &Action{
+			ActUserID:    doer.ID,
+			ActUserName:  doer.Name,
+			OpType:       ActionTransferRepo,
+			RepoID:       repo.ID,
+			RepoUserName: repo.Owner.Name,
+			RepoName:     repo.Name,
+			IsPrivate:    repo.IsPrivate || repo.IsUnlisted,
+			Content:      path.Join(oldOwner.Name, repo.Name),
+		})
+	}
+	if err = transferRepoAction(sess, doer, owner, repo); err != nil {
 		return fmt.Errorf("transferRepoAction: %v", err)
 	}
 
@@ -2271,12 +2321,15 @@ func WatchRepo(userID, repoID int64, watch bool) (err error) {
 	return watchRepo(x, userID, repoID, watch)
 }
 
+// Deprecated: Use Watches.ListByRepo instead.
 func getWatchers(e Engine, repoID int64) ([]*Watch, error) {
 	watches := make([]*Watch, 0, 10)
 	return watches, e.Find(&watches, &Watch{RepoID: repoID})
 }
 
 // GetWatchers returns all watchers of given repository.
+//
+// Deprecated: Use Watches.ListByRepo instead.
 func GetWatchers(repoID int64) ([]*Watch, error) {
 	return getWatchers(x, repoID)
 }
@@ -2293,6 +2346,7 @@ func (repo *Repository) GetWatchers(page int) ([]*User, error) {
 	return users, sess.Find(&users)
 }
 
+// Deprecated: Use Actions.notifyWatchers instead.
 func notifyWatchers(e Engine, act *Action) error {
 	// Add feeds for user self and all watchers.
 	watchers, err := getWatchers(e, act.RepoID)
@@ -2324,6 +2378,8 @@ func notifyWatchers(e Engine, act *Action) error {
 }
 
 // NotifyWatchers creates batch of actions for every watcher.
+//
+// Deprecated: Use Actions.notifyWatchers instead.
 func NotifyWatchers(act *Action) error {
 	return notifyWatchers(x, act)
 }
