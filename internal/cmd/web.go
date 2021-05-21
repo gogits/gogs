@@ -413,208 +413,214 @@ func runWeb(c *cli.Context) error {
 		}, reqSignIn)
 
 		m.Group("/:username/:reponame", func() {
-			m.Group("/settings", func() {
-				m.Combo("").Get(repo.Settings).
-					Post(bindIgnErr(form.RepoSetting{}), repo.SettingsPost)
-				m.Combo("/avatar").Get(repo.SettingsAvatar).
-					Post(binding.MultipartForm(form.Avatar{}), repo.SettingsAvatarPost)
-				m.Post("/avatar/delete", repo.SettingsDeleteAvatar)
-				m.Group("/collaboration", func() {
-					m.Combo("").Get(repo.SettingsCollaboration).Post(repo.SettingsCollaborationPost)
-					m.Post("/access_mode", repo.ChangeCollaborationAccessMode)
-					m.Post("/delete", repo.DeleteCollaboration)
-				})
-				m.Group("/branches", func() {
-					m.Get("", repo.SettingsBranches)
-					m.Post("/default_branch", repo.UpdateDefaultBranch)
-					m.Combo("/*").Get(repo.SettingsProtectedBranch).
-						Post(bindIgnErr(form.ProtectBranch{}), repo.SettingsProtectedBranchPost)
-				}, func(c *context.Context) {
-					if c.Repo.Repository.IsMirror {
-						c.NotFound()
-						return
-					}
-				})
-
-				m.Group("/hooks", func() {
-					webhookRoutes()
-
-					m.Group("/:id", func() {
-						m.Post("/test", repo.TestWebhook)
-						m.Post("/redelivery", repo.RedeliveryWebhook)
+			m.Get("", context.ServeGoGet(), ignSignIn, context.RepoAssignment(), context.RepoRef(), repo.Home)
+			m.Group("", func() {
+				m.Group("/settings", func() {
+					m.Combo("").Get(repo.Settings).
+						Post(bindIgnErr(form.RepoSetting{}), repo.SettingsPost)
+					m.Combo("/avatar").Get(repo.SettingsAvatar).
+						Post(binding.MultipartForm(form.Avatar{}), repo.SettingsAvatarPost)
+					m.Post("/avatar/delete", repo.SettingsDeleteAvatar)
+					m.Group("/collaboration", func() {
+						m.Combo("").Get(repo.SettingsCollaboration).Post(repo.SettingsCollaborationPost)
+						m.Post("/access_mode", repo.ChangeCollaborationAccessMode)
+						m.Post("/delete", repo.DeleteCollaboration)
+					})
+					m.Group("/branches", func() {
+						m.Get("", repo.SettingsBranches)
+						m.Post("/default_branch", repo.UpdateDefaultBranch)
+						m.Combo("/*").Get(repo.SettingsProtectedBranch).
+							Post(bindIgnErr(form.ProtectBranch{}), repo.SettingsProtectedBranchPost)
+					}, func(c *context.Context) {
+						if c.Repo.Repository.IsMirror {
+							c.NotFound()
+							return
+						}
 					})
 
-					m.Group("/git", func() {
-						m.Get("", repo.SettingsGitHooks)
-						m.Combo("/:name").Get(repo.SettingsGitHooksEdit).
-							Post(repo.SettingsGitHooksEditPost)
-					}, context.GitHookService())
+					m.Group("/hooks", func() {
+						webhookRoutes()
+
+						m.Group("/:id", func() {
+							m.Post("/test", repo.TestWebhook)
+							m.Post("/redelivery", repo.RedeliveryWebhook)
+						})
+
+						m.Group("/git", func() {
+							m.Get("", repo.SettingsGitHooks)
+							m.Combo("/:name").Get(repo.SettingsGitHooksEdit).
+								Post(repo.SettingsGitHooksEditPost)
+						}, context.GitHookService())
+					})
+
+					m.Group("/keys", func() {
+						m.Combo("").Get(repo.SettingsDeployKeys).
+							Post(bindIgnErr(form.AddSSHKey{}), repo.SettingsDeployKeysPost)
+						m.Post("/delete", repo.DeleteDeployKey)
+					})
+
+				}, func(c *context.Context) {
+					c.Data["PageIsSettings"] = true
 				})
+			}, reqSignIn, context.RepoAssignment(), reqRepoAdmin, context.RepoRef())
 
-				m.Group("/keys", func() {
-					m.Combo("").Get(repo.SettingsDeployKeys).
-						Post(bindIgnErr(form.AddSSHKey{}), repo.SettingsDeployKeysPost)
-					m.Post("/delete", repo.DeleteDeployKey)
+			m.Post("/action/:action", reqSignIn, context.RepoAssignment(), repo.Action)
+			m.Group("", func() {
+				m.Get("/issues", repo.RetrieveLabels, repo.Issues)
+				m.Get("/issues/:index", repo.ViewIssue)
+				m.Get("/labels/", repo.RetrieveLabels, repo.Labels)
+				m.Get("/milestones", repo.Milestones)
+			}, ignSignIn, context.RepoAssignment(true))
+			m.Group("", func() {
+				// FIXME: should use different URLs but mostly same logic for comments of issue and pull reuqest.
+				// So they can apply their own enable/disable logic on routers.
+				m.Group("/issues", func() {
+					m.Combo("/new", repo.MustEnableIssues).Get(context.RepoRef(), repo.NewIssue).
+						Post(bindIgnErr(form.NewIssue{}), repo.NewIssuePost)
+
+					m.Group("/:index", func() {
+						m.Post("/title", repo.UpdateIssueTitle)
+						m.Post("/content", repo.UpdateIssueContent)
+						m.Combo("/comments").Post(bindIgnErr(form.CreateComment{}), repo.NewComment)
+					})
 				})
-
-			}, func(c *context.Context) {
-				c.Data["PageIsSettings"] = true
-			})
-		}, reqSignIn, context.RepoAssignment(), reqRepoAdmin, context.RepoRef())
-
-		m.Post("/:username/:reponame/action/:action", reqSignIn, context.RepoAssignment(), repo.Action)
-		m.Group("/:username/:reponame", func() {
-			m.Get("/issues", repo.RetrieveLabels, repo.Issues)
-			m.Get("/issues/:index", repo.ViewIssue)
-			m.Get("/labels/", repo.RetrieveLabels, repo.Labels)
-			m.Get("/milestones", repo.Milestones)
-		}, ignSignIn, context.RepoAssignment(true))
-		m.Group("/:username/:reponame", func() {
-			// FIXME: should use different URLs but mostly same logic for comments of issue and pull reuqest.
-			// So they can apply their own enable/disable logic on routers.
-			m.Group("/issues", func() {
-				m.Combo("/new", repo.MustEnableIssues).Get(context.RepoRef(), repo.NewIssue).
-					Post(bindIgnErr(form.NewIssue{}), repo.NewIssuePost)
-
-				m.Group("/:index", func() {
-					m.Post("/title", repo.UpdateIssueTitle)
-					m.Post("/content", repo.UpdateIssueContent)
-					m.Combo("/comments").Post(bindIgnErr(form.CreateComment{}), repo.NewComment)
+				m.Group("/comments/:id", func() {
+					m.Post("", repo.UpdateCommentContent)
+					m.Post("/delete", repo.DeleteComment)
 				})
-			})
-			m.Group("/comments/:id", func() {
-				m.Post("", repo.UpdateCommentContent)
-				m.Post("/delete", repo.DeleteComment)
-			})
-		}, reqSignIn, context.RepoAssignment(true))
-		m.Group("/:username/:reponame", func() {
-			m.Group("/wiki", func() {
-				m.Get("/?:page", repo.Wiki)
-				m.Get("/_pages", repo.WikiPages)
-			}, repo.MustEnableWiki, context.RepoRef())
-		}, ignSignIn, context.RepoAssignment(false, true))
-
-		m.Group("/:username/:reponame", func() {
-			// FIXME: should use different URLs but mostly same logic for comments of issue and pull reuqest.
-			// So they can apply their own enable/disable logic on routers.
-			m.Group("/issues", func() {
-				m.Group("/:index", func() {
-					m.Post("/label", repo.UpdateIssueLabel)
-					m.Post("/milestone", repo.UpdateIssueMilestone)
-					m.Post("/assignee", repo.UpdateIssueAssignee)
-				}, reqRepoWriter)
-			})
-			m.Group("/labels", func() {
-				m.Post("/new", bindIgnErr(form.CreateLabel{}), repo.NewLabel)
-				m.Post("/edit", bindIgnErr(form.CreateLabel{}), repo.UpdateLabel)
-				m.Post("/delete", repo.DeleteLabel)
-				m.Post("/initialize", bindIgnErr(form.InitializeLabels{}), repo.InitializeLabels)
-			}, reqRepoWriter, context.RepoRef())
-			m.Group("/milestones", func() {
-				m.Combo("/new").Get(repo.NewMilestone).
-					Post(bindIgnErr(form.CreateMilestone{}), repo.NewMilestonePost)
-				m.Get("/:id/edit", repo.EditMilestone)
-				m.Post("/:id/edit", bindIgnErr(form.CreateMilestone{}), repo.EditMilestonePost)
-				m.Get("/:id/:action", repo.ChangeMilestonStatus)
-				m.Post("/delete", repo.DeleteMilestone)
-			}, reqRepoWriter, context.RepoRef())
-
-			m.Group("/releases", func() {
-				m.Get("/new", repo.NewRelease)
-				m.Post("/new", bindIgnErr(form.NewRelease{}), repo.NewReleasePost)
-				m.Post("/delete", repo.DeleteRelease)
-				m.Get("/edit/*", repo.EditRelease)
-				m.Post("/edit/*", bindIgnErr(form.EditRelease{}), repo.EditReleasePost)
-			}, repo.MustBeNotBare, reqRepoWriter, func(c *context.Context) {
-				c.Data["PageIsViewFiles"] = true
-			})
-
-			// FIXME: Should use c.Repo.PullRequest to unify template, currently we have inconsistent URL
-			// for PR in same repository. After select branch on the page, the URL contains redundant head user name.
-			// e.g. /org1/test-repo/compare/master...org1:develop
-			// which should be /org1/test-repo/compare/master...develop
-			m.Combo("/compare/*", repo.MustAllowPulls).Get(repo.CompareAndPullRequest).
-				Post(bindIgnErr(form.NewIssue{}), repo.CompareAndPullRequestPost)
+			}, reqSignIn, context.RepoAssignment(true))
+			m.Group("", func() {
+				m.Group("/wiki", func() {
+					m.Get("/?:page", repo.Wiki)
+					m.Get("/_pages", repo.WikiPages)
+				}, repo.MustEnableWiki, context.RepoRef())
+			}, ignSignIn, context.RepoAssignment(false, true))
 
 			m.Group("", func() {
-				m.Combo("/_edit/*").Get(repo.EditFile).
-					Post(bindIgnErr(form.EditRepoFile{}), repo.EditFilePost)
-				m.Combo("/_new/*").Get(repo.NewFile).
-					Post(bindIgnErr(form.EditRepoFile{}), repo.NewFilePost)
-				m.Post("/_preview/*", bindIgnErr(form.EditPreviewDiff{}), repo.DiffPreviewPost)
-				m.Combo("/_delete/*").Get(repo.DeleteFile).
-					Post(bindIgnErr(form.DeleteRepoFile{}), repo.DeleteFilePost)
+				// FIXME: should use different URLs but mostly same logic for comments of issue and pull reuqest.
+				// So they can apply their own enable/disable logic on routers.
+				m.Group("/issues", func() {
+					m.Group("/:index", func() {
+						m.Post("/label", repo.UpdateIssueLabel)
+						m.Post("/milestone", repo.UpdateIssueMilestone)
+						m.Post("/assignee", repo.UpdateIssueAssignee)
+					}, reqRepoWriter)
+				})
+				m.Group("/labels", func() {
+					m.Post("/new", bindIgnErr(form.CreateLabel{}), repo.NewLabel)
+					m.Post("/edit", bindIgnErr(form.CreateLabel{}), repo.UpdateLabel)
+					m.Post("/delete", repo.DeleteLabel)
+					m.Post("/initialize", bindIgnErr(form.InitializeLabels{}), repo.InitializeLabels)
+				}, reqRepoWriter, context.RepoRef())
+				m.Group("/milestones", func() {
+					m.Combo("/new").Get(repo.NewMilestone).
+						Post(bindIgnErr(form.CreateMilestone{}), repo.NewMilestonePost)
+					m.Get("/:id/edit", repo.EditMilestone)
+					m.Post("/:id/edit", bindIgnErr(form.CreateMilestone{}), repo.EditMilestonePost)
+					m.Get("/:id/:action", repo.ChangeMilestonStatus)
+					m.Post("/delete", repo.DeleteMilestone)
+				}, reqRepoWriter, context.RepoRef())
+
+				m.Group("/releases", func() {
+					m.Get("/new", repo.NewRelease)
+					m.Post("/new", bindIgnErr(form.NewRelease{}), repo.NewReleasePost)
+					m.Post("/delete", repo.DeleteRelease)
+					m.Get("/edit/*", repo.EditRelease)
+					m.Post("/edit/*", bindIgnErr(form.EditRelease{}), repo.EditReleasePost)
+				}, repo.MustBeNotBare, reqRepoWriter, func(c *context.Context) {
+					c.Data["PageIsViewFiles"] = true
+				})
+
+				// FIXME: Should use c.Repo.PullRequest to unify template, currently we have inconsistent URL
+				// for PR in same repository. After select branch on the page, the URL contains redundant head user name.
+				// e.g. /org1/test-repo/compare/master...org1:develop
+				// which should be /org1/test-repo/compare/master...develop
+				m.Combo("/compare/*", repo.MustAllowPulls).Get(repo.CompareAndPullRequest).
+					Post(bindIgnErr(form.NewIssue{}), repo.CompareAndPullRequestPost)
 
 				m.Group("", func() {
-					m.Combo("/_upload/*").Get(repo.UploadFile).
-						Post(bindIgnErr(form.UploadRepoFile{}), repo.UploadFilePost)
-					m.Post("/upload-file", repo.UploadFileToServer)
-					m.Post("/upload-remove", bindIgnErr(form.RemoveUploadFile{}), repo.RemoveUploadFileFromServer)
-				}, func(c *context.Context) {
-					if !conf.Repository.Upload.Enabled {
+					m.Combo("/_edit/*").Get(repo.EditFile).
+						Post(bindIgnErr(form.EditRepoFile{}), repo.EditFilePost)
+					m.Combo("/_new/*").Get(repo.NewFile).
+						Post(bindIgnErr(form.EditRepoFile{}), repo.NewFilePost)
+					m.Post("/_preview/*", bindIgnErr(form.EditPreviewDiff{}), repo.DiffPreviewPost)
+					m.Combo("/_delete/*").Get(repo.DeleteFile).
+						Post(bindIgnErr(form.DeleteRepoFile{}), repo.DeleteFilePost)
+
+					m.Group("", func() {
+						m.Combo("/_upload/*").Get(repo.UploadFile).
+							Post(bindIgnErr(form.UploadRepoFile{}), repo.UploadFilePost)
+						m.Post("/upload-file", repo.UploadFileToServer)
+						m.Post("/upload-remove", bindIgnErr(form.RemoveUploadFile{}), repo.RemoveUploadFileFromServer)
+					}, func(c *context.Context) {
+						if !conf.Repository.Upload.Enabled {
+							c.NotFound()
+							return
+						}
+					})
+				}, repo.MustBeNotBare, reqRepoWriter, context.RepoRef(), func(c *context.Context) {
+					if !c.Repo.CanEnableEditor() {
 						c.NotFound()
 						return
 					}
+
+					c.Data["PageIsViewFiles"] = true
 				})
-			}, repo.MustBeNotBare, reqRepoWriter, context.RepoRef(), func(c *context.Context) {
-				if !c.Repo.CanEnableEditor() {
-					c.NotFound()
-					return
-				}
+			}, reqSignIn, context.RepoAssignment())
 
-				c.Data["PageIsViewFiles"] = true
-			})
-		}, reqSignIn, context.RepoAssignment())
-
-		m.Group("/:username/:reponame", func() {
 			m.Group("", func() {
-				m.Get("/releases", repo.MustBeNotBare, repo.Releases)
-				m.Get("/pulls", repo.RetrieveLabels, repo.Pulls)
-				m.Get("/pulls/:index", repo.ViewPull)
-			}, context.RepoRef())
-
-			m.Group("/branches", func() {
-				m.Get("", repo.Branches)
-				m.Get("/all", repo.AllBranches)
-				m.Post("/delete/*", reqSignIn, reqRepoWriter, repo.DeleteBranchPost)
-			}, repo.MustBeNotBare, func(c *context.Context) {
-				c.Data["PageIsViewFiles"] = true
-			})
-
-			m.Group("/wiki", func() {
 				m.Group("", func() {
-					m.Combo("/_new").Get(repo.NewWiki).
-						Post(bindIgnErr(form.NewWiki{}), repo.NewWikiPost)
-					m.Combo("/:page/_edit").Get(repo.EditWiki).
-						Post(bindIgnErr(form.NewWiki{}), repo.EditWikiPost)
-					m.Post("/:page/delete", repo.DeleteWikiPagePost)
-				}, reqSignIn, reqRepoWriter)
-			}, repo.MustEnableWiki, context.RepoRef())
+					m.Get("/releases", repo.MustBeNotBare, repo.Releases)
+					m.Get("/pulls", repo.RetrieveLabels, repo.Pulls)
+					m.Get("/pulls/:index", repo.ViewPull)
+				}, context.RepoRef())
 
-			m.Get("/archive/*", repo.MustBeNotBare, repo.Download)
+				m.Group("/branches", func() {
+					m.Get("", repo.Branches)
+					m.Get("/all", repo.AllBranches)
+					m.Post("/delete/*", reqSignIn, reqRepoWriter, repo.DeleteBranchPost)
+				}, repo.MustBeNotBare, func(c *context.Context) {
+					c.Data["PageIsViewFiles"] = true
+				})
 
-			m.Group("/pulls/:index", func() {
-				m.Get("/commits", context.RepoRef(), repo.ViewPullCommits)
-				m.Get("/files", context.RepoRef(), repo.ViewPullFiles)
-				m.Post("/merge", reqRepoWriter, repo.MergePullRequest)
-			}, repo.MustAllowPulls)
+				m.Group("/wiki", func() {
+					m.Group("", func() {
+						m.Combo("/_new").Get(repo.NewWiki).
+							Post(bindIgnErr(form.NewWiki{}), repo.NewWikiPost)
+						m.Combo("/:page/_edit").Get(repo.EditWiki).
+							Post(bindIgnErr(form.NewWiki{}), repo.EditWikiPost)
+						m.Post("/:page/delete", repo.DeleteWikiPagePost)
+					}, reqSignIn, reqRepoWriter)
+				}, repo.MustEnableWiki, context.RepoRef())
+
+				m.Get("/archive/*", repo.MustBeNotBare, repo.Download)
+
+				m.Group("/pulls/:index", func() {
+					m.Get("/commits", context.RepoRef(), repo.ViewPullCommits)
+					m.Get("/files", context.RepoRef(), repo.ViewPullFiles)
+					m.Post("/merge", reqRepoWriter, repo.MergePullRequest)
+				}, repo.MustAllowPulls)
+
+				m.Group("", func() {
+					m.Get("/src/*", repo.Home)
+					m.Get("/raw/*", repo.SingleDownload)
+					m.Get("/commits/*", repo.RefCommits)
+					m.Get("/commit/:sha([a-f0-9]{7,40})$", repo.Diff)
+					m.Get("/forks", repo.Forks)
+				}, repo.MustBeNotBare, context.RepoRef())
+				m.Get("/commit/:sha([a-f0-9]{7,40})\\.:ext(patch|diff)", repo.MustBeNotBare, repo.RawDiff)
+
+				m.Get("/compare/:before([a-z0-9]{40})\\.\\.\\.:after([a-z0-9]{40})", repo.MustBeNotBare, context.RepoRef(), repo.CompareDiff)
+			}, ignSignIn, context.RepoAssignment())
 
 			m.Group("", func() {
-				m.Get("/src/*", repo.Home)
-				m.Get("/raw/*", repo.SingleDownload)
-				m.Get("/commits/*", repo.RefCommits)
-				m.Get("/commit/:sha([a-f0-9]{7,40})$", repo.Diff)
-				m.Get("/forks", repo.Forks)
-			}, repo.MustBeNotBare, context.RepoRef())
-			m.Get("/commit/:sha([a-f0-9]{7,40})\\.:ext(patch|diff)", repo.MustBeNotBare, repo.RawDiff)
+				// m.Get("", context.ServeGoGet(), repo.Home)
+				m.Get("/stars", repo.Stars)
+				m.Get("/watchers", repo.Watchers)
+			}, ignSignIn, context.RepoAssignment(), context.RepoRef())
 
-			m.Get("/compare/:before([a-z0-9]{40})\\.\\.\\.:after([a-z0-9]{40})", repo.MustBeNotBare, context.RepoRef(), repo.CompareDiff)
-		}, ignSignIn, context.RepoAssignment())
-		m.Group("/:username/:reponame", func() {
-			m.Get("", context.ServeGoGet(), repo.Home)
-			m.Get("/stars", repo.Stars)
-			m.Get("/watchers", repo.Watchers)
-		}, ignSignIn, context.RepoAssignment(), context.RepoRef())
+		})
+
 		// ***** END: Repository *****
 
 		// **********************
