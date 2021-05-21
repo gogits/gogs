@@ -476,7 +476,7 @@ func ParseCompareInfo(c *context.Context) (*db.User, *db.Repository, *git.Reposi
 	c.Repo.PullRequest.SameRepo = isSameRepo
 
 	// Check if base branch is valid.
-	if !c.Repo.GitRepo.HasBranch(baseBranch) {
+	if !c.Repo.GitRepo.HasBranch(baseBranch) && !c.Repo.GitRepo.HasTag(baseBranch) {
 		c.NotFound()
 		return nil, nil, nil, nil, "", ""
 	}
@@ -517,7 +517,7 @@ func ParseCompareInfo(c *context.Context) (*db.User, *db.Repository, *git.Reposi
 	}
 
 	// Check if head branch is valid.
-	if !headGitRepo.HasBranch(headBranch) {
+	if !headGitRepo.HasBranch(headBranch) && !headGitRepo.HasTag(headBranch) {
 		c.NotFound()
 		return nil, nil, nil, nil, "", ""
 	}
@@ -564,8 +564,11 @@ func PrepareCompareDiff(
 
 	headCommitID, err := headGitRepo.BranchCommitID(headBranch)
 	if err != nil {
-		c.Error(err, "get head branch commit ID")
-		return false
+		headCommitID, err = headGitRepo.TagCommitID(headBranch)
+		if err != nil {
+			c.Error(err, "get head branch commit ID")
+			return false
+		}
 	}
 	c.Data["AfterCommitID"] = headCommitID
 
