@@ -130,6 +130,7 @@ func renderFile(c *context.Context, entry *git.TreeEntry, treeLink, rawLink stri
 		return
 	}
 
+	c.Data["Title"] = blob.Name() + " - " + c.Data["Title"]
 	c.Data["FileSize"] = blob.Size()
 	c.Data["FileName"] = blob.Name()
 	c.Data["HighlightClass"] = highlight.FileNameToHighlightClass(blob.Name())
